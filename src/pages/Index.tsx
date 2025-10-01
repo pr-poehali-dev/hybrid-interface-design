@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -6,6 +6,8 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import Icon from '@/components/ui/icon';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { toast } from '@/components/ui/use-toast';
 
 interface Case {
   id: number;
@@ -39,6 +41,12 @@ const Index = () => {
     { id: 2, name: 'Редкий нож', rarity: 'epic', value: 3000, image: '🔪' },
     { id: 3, name: 'AK-47', rarity: 'rare', value: 1500, image: '🎯' },
   ]);
+  const [isOpening, setIsOpening] = useState(false);
+  const [openingCase, setOpeningCase] = useState<Case | null>(null);
+  const [wonItem, setWonItem] = useState<Item | null>(null);
+  const [rouletteItems, setRouletteItems] = useState<Item[]>([]);
+  const [isSpinning, setIsSpinning] = useState(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
 
   const cases: Case[] = [
     { id: 1, name: 'Легендарный', price: 5000, rarity: 'legendary', image: '💎' },
@@ -79,18 +87,122 @@ const Index = () => {
     }
   };
 
+  const playSound = (frequency: number, duration: number, type: OscillatorType = 'sine') => {
+    if (!audioContextRef.current) {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const ctx = audioContextRef.current;
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    oscillator.type = type;
+    oscillator.frequency.setValueAtTime(frequency, ctx.currentTime);
+    gainNode.gain.setValueAtTime(0.3, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + duration);
+    
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    oscillator.start(ctx.currentTime);
+    oscillator.stop(ctx.currentTime + duration);
+  };
+
+  const playOpenSound = () => {
+    playSound(800, 0.1, 'sine');
+    setTimeout(() => playSound(1000, 0.1, 'sine'), 100);
+    setTimeout(() => playSound(1200, 0.2, 'sine'), 200);
+  };
+
+  const playWinSound = (rarity: string) => {
+    if (rarity === 'legendary') {
+      playSound(1200, 0.3, 'triangle');
+      setTimeout(() => playSound(1600, 0.4, 'triangle'), 200);
+    } else if (rarity === 'epic') {
+      playSound(900, 0.3, 'square');
+      setTimeout(() => playSound(1100, 0.3, 'square'), 200);
+    } else {
+      playSound(600, 0.2, 'sine');
+    }
+  };
+
+  const generateRouletteItems = (targetItem: Item): Item[] => {
+    const items: Item[] = [];
+    const itemPool = [
+      { name: 'AWP Dragon Lore', image: '🔫', rarity: 'legendary' as const, baseValue: 5000 },
+      { name: 'Butterfly Knife', image: '🔪', rarity: 'legendary' as const, baseValue: 4500 },
+      { name: 'M4A4 Howl', image: '🎯', rarity: 'epic' as const, baseValue: 3000 },
+      { name: 'AK-47 Fire Serpent', image: '🎯', rarity: 'epic' as const, baseValue: 2800 },
+      { name: 'Glock Fade', image: '🔫', rarity: 'rare' as const, baseValue: 1500 },
+      { name: 'USP-S Kill Confirmed', image: '🔫', rarity: 'rare' as const, baseValue: 1200 },
+      { name: 'P90 Asiimov', image: '🛡️', rarity: 'common' as const, baseValue: 500 },
+      { name: 'Nova Bloomstick', image: '🎲', rarity: 'common' as const, baseValue: 300 },
+    ];
+
+    for (let i = 0; i < 50; i++) {
+      const randomItem = itemPool[Math.floor(Math.random() * itemPool.length)];
+      items.push({
+        id: Date.now() + i,
+        name: randomItem.name,
+        rarity: randomItem.rarity,
+        value: randomItem.baseValue * (Math.random() * 0.3 + 0.85),
+        image: randomItem.image,
+      });
+    }
+
+    items[25] = targetItem;
+    return items;
+  };
+
   const handleOpenCase = (caseItem: Case) => {
     if (coins >= caseItem.price) {
       setCoins(coins - caseItem.price);
+      playOpenSound();
+      
+      const rarityRoll = Math.random();
+      let itemRarity: 'common' | 'rare' | 'epic' | 'legendary';
+      
+      if (rarityRoll < 0.5) itemRarity = 'common';
+      else if (rarityRoll < 0.8) itemRarity = 'rare';
+      else if (rarityRoll < 0.95) itemRarity = 'epic';
+      else itemRarity = 'legendary';
+      
       const newItem: Item = {
         id: Date.now(),
         name: `Предмет из ${caseItem.name}`,
-        rarity: caseItem.rarity,
-        value: caseItem.price * (Math.random() + 0.5),
+        rarity: itemRarity,
+        value: Math.floor(caseItem.price * (Math.random() * 0.5 + 0.8)),
         image: ['🔫', '🔪', '🎯', '🛡️'][Math.floor(Math.random() * 4)],
       };
-      setInventory([newItem, ...inventory]);
+      
+      setWonItem(newItem);
+      setOpeningCase(caseItem);
+      setRouletteItems(generateRouletteItems(newItem));
+      setIsOpening(true);
+      setIsSpinning(true);
+      
+      setTimeout(() => {
+        setIsSpinning(false);
+        playWinSound(newItem.rarity);
+        setInventory([newItem, ...inventory]);
+      }, 3000);
     }
+  };
+
+  const handleSellItem = (item: Item) => {
+    setCoins(coins + Math.floor(item.value * 0.8));
+    setInventory(inventory.filter(i => i.id !== item.id));
+    playSound(700, 0.15, 'sine');
+    toast({
+      title: '✅ Продано!',
+      description: `+${Math.floor(item.value * 0.8).toLocaleString()} 💰`,
+    });
+  };
+
+  const closeOpeningDialog = () => {
+    setIsOpening(false);
+    setOpeningCase(null);
+    setWonItem(null);
+    setRouletteItems([]);
   };
 
   return (
@@ -212,6 +324,13 @@ const Index = () => {
                       <div className="mt-2 text-game-gold font-bold">
                         {item.value.toLocaleString()} 💰
                       </div>
+                      <Button
+                        onClick={() => handleSellItem(item)}
+                        variant="outline"
+                        className="w-full mt-3 border-game-orange text-game-orange hover:bg-game-orange hover:text-white"
+                      >
+                        Продать {Math.floor(item.value * 0.8).toLocaleString()} 💰
+                      </Button>
                     </div>
                   </div>
                 </Card>
@@ -300,6 +419,67 @@ const Index = () => {
           </TabsContent>
         </Tabs>
       </div>
+
+      <Dialog open={isOpening} onOpenChange={closeOpeningDialog}>
+        <DialogContent className="max-w-4xl bg-gradient-to-b from-game-dark to-game-blue border-2 border-primary">
+          <DialogHeader>
+            <DialogTitle className="text-3xl font-bold text-center bg-gradient-to-r from-game-gold via-game-purple to-game-pink bg-clip-text text-transparent">
+              {isSpinning ? 'Открываем кейс...' : 'Поздравляем! 🎉'}
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="relative overflow-hidden h-64 bg-background/30 rounded-lg">
+            <div className="absolute top-1/2 left-1/2 w-1 h-full bg-game-gold z-20 transform -translate-x-1/2 -translate-y-1/2" />
+            
+            <div
+              className={`flex gap-4 h-full items-center transition-transform ${
+                isSpinning ? 'duration-[3000ms] ease-out' : 'duration-0'
+              }`}
+              style={{
+                transform: isSpinning
+                  ? `translateX(calc(50% - ${25 * 160}px))`
+                  : 'translateX(50%)'
+              }}
+            >
+              {rouletteItems.map((item, index) => (
+                <div
+                  key={index}
+                  className={`flex-shrink-0 w-36 h-48 bg-gradient-to-br ${
+                    getRarityColor(item.rarity)
+                  } p-[2px] rounded-lg`}
+                >
+                  <div className="bg-card rounded-lg h-full flex flex-col items-center justify-center p-3">
+                    <div className="text-5xl mb-2">{item.image}</div>
+                    <div className="text-xs font-bold text-center">{item.name}</div>
+                    <Badge className={`${getRarityBadgeColor(item.rarity)} mt-2 text-xs`}>
+                      {item.rarity}
+                    </Badge>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {!isSpinning && wonItem && (
+            <div className="text-center mt-6 animate-scale-in">
+              <div className="text-8xl mb-4">{wonItem.image}</div>
+              <h3 className="text-2xl font-bold mb-2">{wonItem.name}</h3>
+              <Badge className={`${getRarityBadgeColor(wonItem.rarity)} text-lg px-4 py-2 mb-4`}>
+                {wonItem.rarity}
+              </Badge>
+              <div className="text-3xl font-bold text-game-gold mb-4">
+                +{wonItem.value.toLocaleString()} 💰
+              </div>
+              <Button
+                onClick={closeOpeningDialog}
+                className="bg-primary hover:bg-primary/90 text-white font-bold px-8 py-3 text-lg"
+              >
+                Забрать приз!
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
